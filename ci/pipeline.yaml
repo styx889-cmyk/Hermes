@@ -1,0 +1,281 @@
+pipeline:
+  name: AI Product Video TikTok MP4
+  identifier: ai_product_video_tiktok_mp4
+  projectIdentifier: video_factory
+  orgIdentifier: default
+  tags:
+    workflow: ai_video
+    output: tiktok_mp4
+  properties:
+    ci:
+      codebase:
+        connectorRef: <+input>
+        repoName: <+input>
+        build: <+input>
+  variables:
+    - name: reference_source
+      type: String
+      description: Douyin/TikTok/direct video URL, or a video path in the cloned repo.
+      required: true
+      value: <+input>
+    - name: product_image_source
+      type: String
+      description: Real product image URL, or an image path in the cloned repo.
+      required: true
+      value: <+input>
+    - name: audio_mode
+      type: String
+      description: Use original reference audio or Thai voice.
+      required: true
+      value: original
+      allowedValues:
+        - original
+        - thai_voice
+    - name: thai_script
+      type: String
+      description: Thai subtitle/voice script. Required unless thai_srt_source or caption_command is provided.
+      required: false
+      value: ""
+    - name: thai_srt_source
+      type: String
+      description: Optional Thai SRT URL or path.
+      required: false
+      value: ""
+    - name: thai_voice_audio_source
+      type: String
+      description: Optional Thai voice audio URL or path when audio_mode is thai_voice.
+      required: false
+      value: ""
+    - name: duration_limit_seconds
+      type: String
+      description: Optional max duration from the reference video.
+      required: false
+      value: ""
+    - name: product_lock_mode
+      type: String
+      description: overlay forces the supplied product image into every generated scene.
+      required: true
+      value: overlay
+      allowedValues:
+        - overlay
+        - provider
+        - none
+    - name: product_position
+      type: String
+      description: Product placement for the hard identity lock overlay.
+      required: true
+      value: center
+      allowedValues:
+        - center
+        - bottom
+        - top
+    - name: product_scale
+      type: String
+      description: Max product height as a fraction of the vertical frame.
+      required: false
+      value: "0.60"
+    - name: rights_confirmed
+      type: String
+      description: Must be true after confirming rights to use the reference video/audio.
+      required: true
+      value: "false"
+      allowedValues:
+        - "true"
+        - "false"
+    - name: vision_command
+      type: String
+      description: Optional provider command for scene breakdown.
+      required: false
+      value: ""
+    - name: ai_video_command
+      type: String
+      description: Optional provider command for AI scene rendering.
+      required: false
+      value: ""
+    - name: caption_command
+      type: String
+      description: Optional provider command for Thai subtitles.
+      required: false
+      value: ""
+    - name: tts_command
+      type: String
+      description: Optional provider command for Thai TTS.
+      required: false
+      value: ""
+    - name: hermes_base_url
+      type: String
+      description: Optional Hermes AI base URL. When set, empty provider commands use adapters/hermes_ai_adapter.py.
+      required: false
+      value: ""
+    - name: hermes_api_key
+      type: Secret
+      description: Optional Hermes AI API key.
+      required: false
+      value: ""
+    - name: hermes_asset_mode
+      type: String
+      description: paths sends file paths; base64 embeds product/reference frame assets in the request.
+      required: false
+      value: base64
+      allowedValues:
+        - paths
+        - base64
+    - name: hermes_video_model
+      type: String
+      description: Optional Hermes video model identifier.
+      required: false
+      value: ""
+    - name: hermes_vision_model
+      type: String
+      description: Optional Hermes vision model identifier.
+      required: false
+      value: ""
+    - name: hermes_caption_model
+      type: String
+      description: Optional Hermes caption model identifier.
+      required: false
+      value: ""
+    - name: hermes_tts_model
+      type: String
+      description: Optional Hermes Thai TTS model identifier.
+      required: false
+      value: ""
+    - name: artifact_upload_command
+      type: String
+      description: Optional shell command prefix used to upload dist/tiktok_product_video.mp4.
+      required: false
+      value: ""
+  stages:
+    - stage:
+        name: Render TikTok MP4
+        identifier: render_tiktok_mp4
+        type: CI
+        spec:
+          cloneCodebase: true
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Build product-locked video
+                  identifier: build_product_locked_video
+                  timeout: 4h
+                  spec:
+                    shell: Bash
+                    command: |-
+                      set -euo pipefail
+
+                      sudo apt-get update
+                      sudo apt-get install -y --no-install-recommends \
+                        ca-certificates \
+                        ffmpeg \
+                        fonts-noto-core \
+                        fonts-thai-tlwg \
+                        python3 \
+                        python3-pip
+                      python3 -m pip install --user --upgrade yt-dlp pillow
+                      export PATH="$HOME/.local/bin:$PATH"
+
+                      FACTORY_SCRIPT="bin/video_factory.py"
+                      if [ ! -f "$FACTORY_SCRIPT" ]; then
+                        FACTORY_SCRIPT="hermes-ai-video-factory/bin/video_factory.py"
+                      fi
+                      if [ ! -f "$FACTORY_SCRIPT" ]; then
+                        FACTORY_SCRIPT="outputs/hermes-ai-video-factory/bin/video_factory.py"
+                      fi
+                      if [ ! -f "$FACTORY_SCRIPT" ]; then
+                        echo "Could not find video_factory.py in the cloned repo."
+                        exit 1
+                      fi
+                      ADAPTER_SCRIPT="adapters/hermes_ai_adapter.py"
+                      if [ ! -f "$ADAPTER_SCRIPT" ]; then
+                        ADAPTER_SCRIPT="hermes-ai-video-factory/adapters/hermes_ai_adapter.py"
+                      fi
+                      if [ ! -f "$ADAPTER_SCRIPT" ]; then
+                        ADAPTER_SCRIPT="outputs/hermes-ai-video-factory/adapters/hermes_ai_adapter.py"
+                      fi
+
+                      if [ -n "${HERMES_BASE_URL:-}" ] && [ -f "$ADAPTER_SCRIPT" ]; then
+                        export VISION_COMMAND="${VISION_COMMAND:-python3 $ADAPTER_SCRIPT}"
+                        export AI_VIDEO_COMMAND="${AI_VIDEO_COMMAND:-python3 $ADAPTER_SCRIPT}"
+                        export CAPTION_COMMAND="${CAPTION_COMMAND:-python3 $ADAPTER_SCRIPT}"
+                        export TTS_COMMAND="${TTS_COMMAND:-python3 $ADAPTER_SCRIPT}"
+                      fi
+
+                      mkdir -p build/video_factory dist
+
+                      OPTIONAL_ARGS=()
+                      if [ -n "${THAI_SCRIPT:-}" ]; then
+                        printf '%s' "$THAI_SCRIPT" > build/thai_script.txt
+                        OPTIONAL_ARGS+=(--thai-script-file build/thai_script.txt)
+                      fi
+                      if [ -n "${THAI_SRT_SOURCE:-}" ]; then
+                        OPTIONAL_ARGS+=(--thai-srt "$THAI_SRT_SOURCE")
+                      fi
+                      if [ -n "${THAI_VOICE_AUDIO_SOURCE:-}" ]; then
+                        OPTIONAL_ARGS+=(--thai-voice-audio "$THAI_VOICE_AUDIO_SOURCE")
+                      fi
+                      if [ -n "${DURATION_LIMIT_SECONDS:-}" ]; then
+                        OPTIONAL_ARGS+=(--duration-limit "$DURATION_LIMIT_SECONDS")
+                      fi
+                      if [ -n "${PRODUCT_LOCK_MODE:-}" ]; then
+                        OPTIONAL_ARGS+=(--product-lock-mode "$PRODUCT_LOCK_MODE")
+                      fi
+                      if [ -n "${PRODUCT_POSITION:-}" ]; then
+                        OPTIONAL_ARGS+=(--product-position "$PRODUCT_POSITION")
+                      fi
+                      if [ -n "${PRODUCT_SCALE:-}" ]; then
+                        OPTIONAL_ARGS+=(--product-scale "$PRODUCT_SCALE")
+                      fi
+                      if [ "${RIGHTS_CONFIRMED:-false}" = "true" ]; then
+                        OPTIONAL_ARGS+=(--rights-confirmed)
+                      fi
+
+                      python3 "$FACTORY_SCRIPT" run \
+                        --reference "$REFERENCE_SOURCE" \
+                        --product-image "$PRODUCT_IMAGE_SOURCE" \
+                        --audio-mode "$AUDIO_MODE" \
+                        --workdir build/video_factory \
+                        --output dist/tiktok_product_video.mp4 \
+                        "${OPTIONAL_ARGS[@]}"
+
+                      ffprobe -v error \
+                        -show_entries stream=width,height,avg_frame_rate:format=duration,size \
+                        -of json dist/tiktok_product_video.mp4 \
+                        | tee dist/tiktok_product_video.ffprobe.json
+
+                      sha256sum dist/tiktok_product_video.mp4 | tee dist/tiktok_product_video.sha256
+
+                      if [ -n "${ARTIFACT_UPLOAD_COMMAND:-}" ]; then
+                        bash -lc "${ARTIFACT_UPLOAD_COMMAND} dist/tiktok_product_video.mp4"
+                      fi
+                    envVariables:
+                      REFERENCE_SOURCE: <+pipeline.variables.reference_source>
+                      PRODUCT_IMAGE_SOURCE: <+pipeline.variables.product_image_source>
+                      AUDIO_MODE: <+pipeline.variables.audio_mode>
+                      THAI_SCRIPT: <+pipeline.variables.thai_script>
+                      THAI_SRT_SOURCE: <+pipeline.variables.thai_srt_source>
+                      THAI_VOICE_AUDIO_SOURCE: <+pipeline.variables.thai_voice_audio_source>
+                      DURATION_LIMIT_SECONDS: <+pipeline.variables.duration_limit_seconds>
+                      PRODUCT_LOCK_MODE: <+pipeline.variables.product_lock_mode>
+                      PRODUCT_POSITION: <+pipeline.variables.product_position>
+                      PRODUCT_SCALE: <+pipeline.variables.product_scale>
+                      RIGHTS_CONFIRMED: <+pipeline.variables.rights_confirmed>
+                      VISION_COMMAND: <+pipeline.variables.vision_command>
+                      AI_VIDEO_COMMAND: <+pipeline.variables.ai_video_command>
+                      CAPTION_COMMAND: <+pipeline.variables.caption_command>
+                      TTS_COMMAND: <+pipeline.variables.tts_command>
+                      HERMES_BASE_URL: <+pipeline.variables.hermes_base_url>
+                      HERMES_API_KEY: <+pipeline.variables.hermes_api_key>
+                      HERMES_ASSET_MODE: <+pipeline.variables.hermes_asset_mode>
+                      HERMES_VIDEO_MODEL: <+pipeline.variables.hermes_video_model>
+                      HERMES_VISION_MODEL: <+pipeline.variables.hermes_vision_model>
+                      HERMES_CAPTION_MODEL: <+pipeline.variables.hermes_caption_model>
+                      HERMES_TTS_MODEL: <+pipeline.variables.hermes_tts_model>
+                      ARTIFACT_UPLOAD_COMMAND: <+pipeline.variables.artifact_upload_command>
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec:
+              size: xlarge
